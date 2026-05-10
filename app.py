@@ -1,16 +1,15 @@
 import os
-import json
-import anthropic
+from groq import Groq
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)  # allows requests from your GitHub Pages frontend
+CORS(app)
 
-client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 
-@app.route("/", methods=["GET"])a
+@app.route("/", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "message": "Sprint Report API is running"})
 
@@ -27,7 +26,7 @@ def generate_report():
         goal     = body.get("goal", "")
         notes    = body.get("notes", "")
         sections = body.get("sections", [])
-        tickets  = body.get("tickets", [])  # parsed Excel rows from frontend
+        tickets  = body.get("tickets", [])
 
         data_context = build_data_context(tickets)
 
@@ -57,17 +56,27 @@ Notes: {notes}
 
 SECTIONS TO INCLUDE: {', '.join(sections)}
 
-Generate a thorough, accurate, stakeholder-ready sprint report. Use the data accurately.
-Be specific with numbers. Make it professional and insightful.
-Start directly with the <h1> tag."""
+Generate a thorough, accurate, stakeholder-ready sprint report.
+Use the data accurately. Be specific with numbers. Start directly with the <h1> tag."""
 
-        message = client.messages.create(
-            model="claude-sonnet-4-20250514",
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
             max_tokens=4000,
-            messages=[{"role": "user", "content": prompt}]
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a professional Scrum Master assistant. Always return only clean HTML with no markdown, no code fences, no extra explanation."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
         )
 
-        html = message.content[0].text.replace("```html", "").replace("```", "").strip()
+        html = response.choices[0].message.content
+        html = html.replace("```html", "").replace("```", "").strip()
+
         return jsonify({"success": True, "html": html})
 
     except Exception as e:
@@ -78,11 +87,11 @@ def build_data_context(tickets):
     if not tickets:
         return "No ticket data provided — generate report from metadata only."
 
-    total  = len(tickets)
-    done   = [t for t in tickets if (t.get("status") or "").lower().strip() == "done"]
-    inprog = [t for t in tickets if "progress" in (t.get("status") or "").lower()]
-    todo   = [t for t in tickets if (t.get("status") or "").lower().strip() in ["to do", "todo"]]
-    bugs   = [t for t in tickets if (t.get("type") or "").lower() == "bug"]
+    total     = len(tickets)
+    done      = [t for t in tickets if (t.get("status") or "").lower().strip() == "done"]
+    inprog    = [t for t in tickets if "progress" in (t.get("status") or "").lower()]
+    todo      = [t for t in tickets if (t.get("status") or "").lower().strip() in ["to do", "todo"]]
+    bugs      = [t for t in tickets if (t.get("type") or "").lower() == "bug"]
     bugs_done = [b for b in bugs if (b.get("status") or "").lower().strip() == "done"]
 
     pts      = sum(float(t.get("points") or 0) for t in tickets)
