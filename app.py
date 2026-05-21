@@ -49,16 +49,22 @@ def analyse(tickets, meta):
 
     lead_times, cycle_times = [], []
     for t in done:
-        created  = parse_date(t.get('created'))
-        resolved = parse_date(t.get('resolved'))
-        updated  = parse_date(t.get('updated'))
-        ref = resolved or updated
-        if created and ref:
-            lt = days_between(created, ref)
+        created   = parse_date(t.get('created'))
+        dev_start = parse_date(t.get('dev_start'))
+        uat_date  = parse_date(t.get('uat_date'))
+        resolved  = parse_date(t.get('resolved'))
+
+        # Lead Time = Created → UAT Date (or Resolved as fallback)
+        end_ref = uat_date or resolved
+        if created and end_ref:
+            lt = days_between(created, end_ref)
             if lt is not None: lead_times.append(lt)
-        if resolved and updated:
-            ct = days_between(updated, resolved)
-            if ct and ct < 30: cycle_times.append(ct)
+
+        # Cycle Time = Dev Start Date → UAT Date (or Resolved as fallback)
+        start_ref = dev_start
+        if start_ref and end_ref:
+            ct = days_between(start_ref, end_ref)
+            if ct is not None and ct < 60: cycle_times.append(ct)
 
     avg_lead  = round(sum(lead_times)  / len(lead_times),  1) if lead_times  else None
     avg_cycle = round(sum(cycle_times) / len(cycle_times), 1) if cycle_times else None
@@ -330,8 +336,8 @@ th, td { font-family: Arial, sans-serif; }
         </div>'''
 
         html += f'''<div style="background:#f8fafc;border-radius:10px;padding:10px 14px;border:1px solid #e2e8f0;font-size:12px;color:#64748b;font-family:Arial">
-          <strong style="color:#374151">Lead Time</strong> = Created → Resolved &nbsp;|&nbsp;
-          <strong style="color:#374151">Cycle Time</strong> ≈ Last Updated → Resolved &nbsp;|&nbsp;
+          <strong style="color:#374151">Lead Time</strong> = Created Date → UAT Date &nbsp;|&nbsp;
+          <strong style="color:#374151">Cycle Time</strong> = Dev Start Date → UAT Date &nbsp;|&nbsp;
           Based on <strong style="color:#374151">{len(d['lead_times'])}</strong> completed tickets
         </div>'''
     else:
