@@ -63,6 +63,13 @@ def analyse(tickets, meta):
     avg_lead  = round(sum(lead_times)  / len(lead_times),  1) if lead_times  else None
     avg_cycle = round(sum(cycle_times) / len(cycle_times), 1) if cycle_times else None
 
+    # Lead/Cycle time bucketing
+    BUCKETS = [(0,10,'0–10 days'),(10,20,'10–20 days'),(20,30,'20–30 days'),(30,45,'30–45 days'),(45,99999,'45+ days')]
+    def bucket_data(times):
+        return [(label, sum(1 for t in times if lo <= t < hi)) for lo, hi, label in BUCKETS]
+    lead_buckets  = bucket_data(lead_times)
+    cycle_buckets = bucket_data(cycle_times)
+
     assignee_map = defaultdict(lambda: {'done':0,'inprog':0,'todo':0,'pts':0,'total':0})
     for t in tickets:
         a = (t.get('assignee') or 'Unassigned').strip()
@@ -90,6 +97,7 @@ def analyse(tickets, meta):
         'bugs_total': len(bugs), 'bugs_done': len(bugs_done),
         'bugs_open': len(bugs) - len(bugs_done),
         'avg_lead': avg_lead, 'avg_cycle': avg_cycle, 'lead_times': lead_times,
+        'lead_buckets': lead_buckets, 'cycle_buckets': cycle_buckets,
         'assignees': dict(assignee_map),
         'epics': dict(epic_map),
         'incomplete': [t for t in tickets if not is_done(t.get('status'))],
@@ -284,19 +292,50 @@ th, td { font-family: Arial, sans-serif; }
         lt_sorted = sorted(d['lead_times']) if d['lead_times'] else []
         p50 = lt_sorted[len(lt_sorted)//2] if lt_sorted else '—'
         p90 = lt_sorted[int(len(lt_sorted)*0.9)] if len(lt_sorted) >= 5 else (lt_sorted[-1] if lt_sorted else '—')
-        html += f'''<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:1rem">
+
+        # KPI cards
+        html += f'''<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:1.5rem">
           {stat(f"{d['avg_lead']}d" if d['avg_lead'] else '—', 'Avg Lead Time', '#1d4ed8', '#eff6ff', '#bfdbfe')}
           {stat(f"{d['avg_cycle']}d" if d['avg_cycle'] else '—', 'Avg Cycle Time', '#7c3aed', '#f5f3ff', '#ddd6fe')}
           {stat(f"{p50}d", 'Median (P50)', '#0369a1', '#f0f9ff', '#bae6fd')}
           {stat(f"{p90}d", 'P90 Lead Time', '#dc2626', '#fef2f2', '#fecaca')}
-        </div>
-        <div style="background:#f8fafc;border-radius:10px;padding:10px 14px;border:1px solid #e2e8f0;font-size:12px;color:#64748b;font-family:Arial">
+        </div>'''
+
+        # Bucket charts side by side
+        def render_bucket_chart(buckets, title, color):
+            max_count = max((c for _, c in buckets), default=1) or 1
+            rows = ''
+            for label, count in buckets:
+                bar_w = int(count / max_count * 180) if max_count else 0
+                pct   = round(count / len(d['lead_times']) * 100) if d['lead_times'] else 0
+                rows += f'''<tr>
+                  <td style="padding:6px 10px 6px 0;font-size:12px;color:#374151;font-family:Arial;white-space:nowrap;width:90px">{label}</td>
+                  <td style="padding:6px 6px;width:200px">
+                    <svg width="200" height="18" viewBox="0 0 200 18" style="-webkit-print-color-adjust:exact;print-color-adjust:exact">
+                      <rect width="200" height="18" rx="4" fill="#f1f5f9"/>
+                      <rect width="{bar_w}" height="18" rx="4" fill="{color}" style="-webkit-print-color-adjust:exact;print-color-adjust:exact"/>
+                    </svg>
+                  </td>
+                  <td style="padding:6px 0 6px 8px;font-size:12px;font-weight:700;color:{color};font-family:Arial;width:30px">{count}</td>
+                  <td style="padding:6px 0 6px 4px;font-size:11px;color:#94a3b8;font-family:Arial">{pct}%</td>
+                </tr>'''
+            return f'''<div style="flex:1;min-width:260px;background:#f8fafc;border-radius:12px;padding:1rem;border:1px solid #e2e8f0;-webkit-print-color-adjust:exact;print-color-adjust:exact">
+              <div style="font-size:12px;font-weight:700;color:#1e293b;font-family:Arial;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">{title}</div>
+              <table style="width:100%;border-collapse:collapse">{rows}</table>
+            </div>'''
+
+        html += f'''<div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1rem">
+          {render_bucket_chart(d['lead_buckets'],  'Lead Time Distribution',  '#3b82f6')}
+          {render_bucket_chart(d['cycle_buckets'], 'Cycle Time Distribution', '#8b5cf6')}
+        </div>'''
+
+        html += f'''<div style="background:#f8fafc;border-radius:10px;padding:10px 14px;border:1px solid #e2e8f0;font-size:12px;color:#64748b;font-family:Arial">
           <strong style="color:#374151">Lead Time</strong> = Created → Resolved &nbsp;|&nbsp;
-          <strong style="color:#374151">Cycle Time</strong> = In Progress → Resolved &nbsp;|&nbsp;
+          <strong style="color:#374151">Cycle Time</strong> ≈ Last Updated → Resolved &nbsp;|&nbsp;
           Based on <strong style="color:#374151">{len(d['lead_times'])}</strong> completed tickets
         </div>'''
     else:
-        html += '<div style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:12px 16px;font-size:13px;color:#713f12;font-family:Arial;-webkit-print-color-adjust:exact;print-color-adjust:exact">⚠️ Add <strong>Created</strong> and <strong>Resolved</strong> date columns to your Jira export to unlock Lead Time &amp; Cycle Time metrics.</div>'
+        html += '<div style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:12px 16px;font-size:13px;color:#713f12;font-family:Arial;-webkit-print-color-adjust:exact;print-color-adjust:exact">⚠️ Add <strong>Created</strong> and <strong>Resolved</strong> date columns to your Jira export to unlock Lead Time &amp; Cycle Time metrics.</div>' 
 
     # ── 4. BUG / DEFECT ANALYSIS ──────────────────────────────────────────────
     html += section_title('04', 'Bug / Defect Analysis')
