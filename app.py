@@ -18,11 +18,21 @@ def is_inprog(s): return any(x in (s or '').lower().strip() for x in INPROG_STAT
 def is_bug(t):    return (t or '').lower().strip() in BUG_TYPES
 
 def parse_date(val):
-    if not val: return None
+    if not val or str(val).strip() in ('', 'nan', 'None', '[no field found]'): return None
     if isinstance(val, datetime): return val.replace(tzinfo=None) if val.tzinfo else val
-    for fmt in ['%Y-%m-%d %H:%M:%S','%Y-%m-%dT%H:%M:%S.%fZ','%Y-%m-%dT%H:%M:%SZ',
-                '%Y-%m-%dT%H:%M:%S','%d/%m/%Y','%m/%d/%Y','%Y-%m-%d','%d-%b-%Y']:
-        try: return datetime.strptime(str(val).strip()[:19], fmt[:19])
+    # Handle Excel serial numbers passed as strings e.g. "46000.0"
+    try:
+        serial = float(str(val).strip())
+        if 30000 < serial < 60000:
+            from datetime import timedelta
+            return datetime(1899, 12, 30) + timedelta(days=serial)
+    except: pass
+    # Try common date string formats
+    s = str(val).strip()[:19]
+    for fmt in ['%Y-%m-%d','%Y-%m-%d %H:%M:%S','%Y-%m-%dT%H:%M:%S',
+                '%Y-%m-%dT%H:%M:%S.%f','%d/%m/%Y','%m/%d/%Y',
+                '%d-%m-%Y','%d-%b-%Y','%b %d, %Y','%m/%d/%Y %H:%M']:
+        try: return datetime.strptime(s[:len(fmt)], fmt)
         except: continue
     return None
 
