@@ -48,15 +48,30 @@ def analyse(tickets, meta):
     completion = round(done_pts / total_pts * 100) if total_pts else 0
 
     lead_times, cycle_times = [], []
-    for t in tickets:  # all tickets, not just done
+    missing_dates = []
+    for t in tickets:
         dev_start = parse_date(t.get('dev_start'))
         uat_date  = parse_date(t.get('uat_date'))
+        key       = t.get('key','')
+        summary   = (t.get('summary') or '')[:50]
 
-        # Cycle Time = Dev Start → UAT Date (only when both exist)
         if dev_start and uat_date:
             ct = days_between(dev_start, uat_date)
             if ct is not None and 0 <= ct <= 120:
-                cycle_times.append({'days': ct, 'key': t.get('key',''), 'summary': t.get('summary',''), 'points': t.get('points',0)})
+                cycle_times.append({
+                    'days': ct,
+                    'key': key,
+                    'summary': summary,
+                    'points': t.get('points', 0),
+                    'assignee': t.get('assignee','')
+                })
+        else:
+            # track which date is missing
+            missing_dates.append({
+                'key': key,
+                'summary': summary,
+                'missing': 'Dev Start' if not dev_start else 'UAT Date'
+            })
 
     avg_lead  = None
     cycle_days = [c['days'] for c in cycle_times]
@@ -95,7 +110,7 @@ def analyse(tickets, meta):
         'completion': completion,
         'bugs_total': len(bugs), 'bugs_done': len(bugs_done),
         'bugs_open': len(bugs) - len(bugs_done),
-        'avg_lead': None, 'avg_cycle': avg_cycle, 'lead_times': [], 'cycle_times': cycle_times,
+        'avg_lead': None, 'avg_cycle': avg_cycle, 'lead_times': [], 'cycle_times': cycle_times, 'missing_dates': missing_dates,
         'lead_buckets': [], 'cycle_buckets': cycle_buckets,
         'assignees': dict(assignee_map),
         'epics': dict(epic_map),
@@ -363,12 +378,26 @@ th, td { font-family: Arial, sans-serif; }
           </table>
         </div>'''
 
+        # Missing dates warning
+        missing = d.get('missing_dates', [])
+        if missing:
+            html += f'''<div style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:10px 14px;font-size:12px;color:#713f12;font-family:Arial;margin-top:1rem;-webkit-print-color-adjust:exact;print-color-adjust:exact">
+              ⚠️ <strong>{len(missing)} tickets skipped</strong> — missing date fields:
+              <span style="color:#92400e">{', '.join(set(m['missing'] for m in missing))}</span>.
+              Tickets: {', '.join(m['key'] for m in missing[:8])}{' ...' if len(missing) > 8 else ''}
+            </div>'''
+
         html += f'''<div style="background:#f8fafc;border-radius:10px;padding:10px 14px;border:1px solid #e2e8f0;font-size:12px;color:#64748b;font-family:Arial;margin-top:1rem">
-          <strong style="color:#374151">Cycle Time</strong> = Dev Start Date → UAT Date &nbsp;|&nbsp;
+          <strong style="color:#374151">Cycle Time</strong> = Dev Start → UAT Date &nbsp;|&nbsp;
           🟢 &lt;5d Fast &nbsp; 🟡 5–15d Normal &nbsp; 🔴 &gt;15d Slow
         </div>'''
     else:
-        html += '<div style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:12px 16px;font-size:13px;color:#713f12;font-family:Arial;-webkit-print-color-adjust:exact;print-color-adjust:exact">⚠️ No Cycle Time data found. Make sure your Jira export includes <strong>Dev Start</strong> and <strong>UAT Date</strong> columns with dates filled in.</div>'
+        missing = d.get('missing_dates', [])
+        html += f'''<div style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:12px 16px;font-size:13px;color:#713f12;font-family:Arial;-webkit-print-color-adjust:exact;print-color-adjust:exact">
+          ⚠️ No Cycle Time data found for any ticket.<br>
+          Make sure your Jira export has <strong>Dev Start</strong> and <strong>UAT Date</strong> columns filled in.<br>
+          {f"<br>{len(missing)} tickets found but missing dates." if missing else ""}
+        </div>'''
 
 
     # ── 4. BUG / DEFECT ANALYSIS ──────────────────────────────────────────────
