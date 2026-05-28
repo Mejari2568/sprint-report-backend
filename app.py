@@ -9,7 +9,7 @@ app = Flask(__name__)
 CORS(app)
 
 # ── Status classification ─────────────────────────────────────────────────────
-DONE_STATUSES   = {'done','closed','resolved','released','ready for prod','ready for release','deployed','uat'}
+DONE_STATUSES   = {'done','closed','resolved','released','ready for prod','ready for release','deployed','uat','ready for production'}
 INPROG_STATUSES = {'in progress','in development','in review','in testing','testing','development','review','in qa','qa'}
 BUG_TYPES       = {'bug','defect'}
 
@@ -28,12 +28,17 @@ def parse_date(val):
             return datetime(1899, 12, 30) + timedelta(days=serial)
     except: pass
     # Try common date string formats
-    s = str(val).strip()[:19]
+    s = str(val).strip()
+    # Try full string first, then truncated
     for fmt in ['%Y-%m-%d','%Y-%m-%d %H:%M:%S','%Y-%m-%dT%H:%M:%S',
                 '%Y-%m-%dT%H:%M:%S.%f','%d/%m/%Y','%m/%d/%Y',
-                '%d-%m-%Y','%d-%b-%Y','%b %d, %Y','%m/%d/%Y %H:%M']:
-        try: return datetime.strptime(s[:len(fmt)], fmt)
-        except: continue
+                '%d-%m-%Y','%d-%b-%Y','%b %d, %Y','%m/%d/%Y %H:%M',
+                '%m/%d/%Y %H:%M:%S','%Y/%m/%d','%m/%d/%y','%d/%m/%y']:
+        try: return datetime.strptime(s, fmt)
+        except: pass
+        try: return datetime.strptime(s[:10], fmt[:10])
+        except: pass
+    print(f"parse_date FAILED for: {repr(val)}")
     return None
 
 def days_between(d1, d2):
@@ -538,6 +543,10 @@ def generate_report():
         body    = request.get_json()
         meta    = {k: body.get(k, '') for k in ['sprint','dates','team','scrum_master','goal','notes']}
         tickets = body.get("tickets", [])
+        # Debug: print first ticket date fields
+        if tickets:
+            t = tickets[0]
+            print(f"DEBUG first ticket: key={t.get('key')} dev_start={repr(t.get('dev_start'))} uat_date={repr(t.get('uat_date'))} status={repr(t.get('status'))}")
         data    = analyse(tickets, meta)
         html    = build_html(data)
         return jsonify({"success": True, "html": html})
