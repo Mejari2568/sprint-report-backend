@@ -48,33 +48,26 @@ def analyse(tickets, meta):
     completion = round(done_pts / total_pts * 100) if total_pts else 0
 
     lead_times, cycle_times = [], []
-    for t in done:
-        created   = parse_date(t.get('created'))
+    for t in tickets:  # all tickets, not just done
         dev_start = parse_date(t.get('dev_start'))
         uat_date  = parse_date(t.get('uat_date'))
-        resolved  = parse_date(t.get('resolved'))
 
-        # Lead Time = Created → UAT Date (or Resolved as fallback)
-        end_ref = uat_date or resolved
-        if created and end_ref:
-            lt = days_between(created, end_ref)
-            if lt is not None: lead_times.append(lt)
+        # Cycle Time = Dev Start → UAT Date (only when both exist)
+        if dev_start and uat_date:
+            ct = days_between(dev_start, uat_date)
+            if ct is not None and 0 <= ct <= 120:
+                cycle_times.append({'days': ct, 'key': t.get('key',''), 'summary': t.get('summary',''), 'points': t.get('points',0)})
 
-        # Cycle Time = Dev Start Date → UAT Date (or Resolved as fallback)
-        start_ref = dev_start
-        if start_ref and end_ref:
-            ct = days_between(start_ref, end_ref)
-            if ct is not None and ct < 60: cycle_times.append(ct)
+    avg_lead  = None
+    cycle_days = [c['days'] for c in cycle_times]
+    avg_cycle = round(sum(cycle_days) / len(cycle_days), 1) if cycle_days else None
 
-    avg_lead  = round(sum(lead_times)  / len(lead_times),  1) if lead_times  else None
-    avg_cycle = round(sum(cycle_times) / len(cycle_times), 1) if cycle_times else None
-
-    # Lead/Cycle time bucketing
-    BUCKETS = [(0,10,'0–10 days'),(10,20,'10–20 days'),(20,30,'20–30 days'),(30,45,'30–45 days'),(45,99999,'45+ days')]
+    # Cycle time bucketing only
+    BUCKETS = [(0,5,'0–5 days'),(5,10,'5–10 days'),(10,15,'10–15 days'),(15,20,'15–20 days'),(20,30,'20–30 days'),(30,99999,'30+ days')]
     def bucket_data(times):
         return [(label, sum(1 for t in times if lo <= t < hi)) for lo, hi, label in BUCKETS]
-    lead_buckets  = bucket_data(lead_times)
-    cycle_buckets = bucket_data(cycle_times)
+    lead_buckets  = []
+    cycle_buckets = bucket_data(cycle_days)
 
     assignee_map = defaultdict(lambda: {'done':0,'inprog':0,'todo':0,'pts':0,'total':0})
     for t in tickets:
@@ -102,8 +95,8 @@ def analyse(tickets, meta):
         'completion': completion,
         'bugs_total': len(bugs), 'bugs_done': len(bugs_done),
         'bugs_open': len(bugs) - len(bugs_done),
-        'avg_lead': avg_lead, 'avg_cycle': avg_cycle, 'lead_times': lead_times,
-        'lead_buckets': lead_buckets, 'cycle_buckets': cycle_buckets,
+        'avg_lead': None, 'avg_cycle': avg_cycle, 'lead_times': [], 'cycle_times': cycle_times,
+        'lead_buckets': [], 'cycle_buckets': cycle_buckets,
         'assignees': dict(assignee_map),
         'epics': dict(epic_map),
         'incomplete': [t for t in tickets if not is_done(t.get('status'))],
@@ -292,56 +285,91 @@ th, td { font-family: Arial, sans-serif; }
         html += f'<div style="display:flex;align-items:center;gap:8px;font-family:Arial;font-size:13px"><div style="width:12px;height:12px;border-radius:3px;background:{color};-webkit-print-color-adjust:exact;print-color-adjust:exact"></div><span style="color:#374151">{label}: <strong>{val}</strong> ({pct}%)</span></div>'
     html += '</div></div>'
 
-    # ── 3. LEAD TIME & CYCLE TIME ─────────────────────────────────────────────
-    html += section_title('03', 'Lead Time & Cycle Time')
-    if d['avg_lead'] or d['avg_cycle']:
-        lt_sorted = sorted(d['lead_times']) if d['lead_times'] else []
-        p50 = lt_sorted[len(lt_sorted)//2] if lt_sorted else '—'
-        p90 = lt_sorted[int(len(lt_sorted)*0.9)] if len(lt_sorted) >= 5 else (lt_sorted[-1] if lt_sorted else '—')
+
+    # ── 3. CYCLE TIME ────────────────────────────────────────────────────────
+    html += section_title('03', 'Cycle Time Analysis')
+    cycle_times = d.get('cycle_times', [])
+    cycle_days  = [c['days'] for c in cycle_times]
+
+    if cycle_days:
+        ct_sorted = sorted(cycle_days)
+        avg_ct = round(sum(ct_sorted) / len(ct_sorted), 1)
+        p50    = ct_sorted[len(ct_sorted)//2]
+        p90    = ct_sorted[int(len(ct_sorted)*0.9)] if len(ct_sorted) >= 5 else ct_sorted[-1]
+        min_ct = min(ct_sorted)
+        max_ct = max(ct_sorted)
 
         # KPI cards
-        html += f'''<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:1.5rem">
-          {stat(f"{d['avg_lead']}d" if d['avg_lead'] else '—', 'Avg Lead Time', '#1d4ed8', '#eff6ff', '#bfdbfe')}
-          {stat(f"{d['avg_cycle']}d" if d['avg_cycle'] else '—', 'Avg Cycle Time', '#7c3aed', '#f5f3ff', '#ddd6fe')}
-          {stat(f"{p50}d", 'Median (P50)', '#0369a1', '#f0f9ff', '#bae6fd')}
-          {stat(f"{p90}d", 'P90 Lead Time', '#dc2626', '#fef2f2', '#fecaca')}
+        html += f'''<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:1.5rem">
+          {stat(f"{avg_ct}d", "Avg Cycle Time", "#7c3aed", "#f5f3ff", "#ddd6fe")}
+          {stat(f"{p50}d",    "Median (P50)",   "#0369a1", "#f0f9ff", "#bae6fd")}
+          {stat(f"{p90}d",    "P90",            "#dc2626", "#fef2f2", "#fecaca")}
+          {stat(f"{min_ct}d", "Fastest",        "#059669", "#f0fdf4", "#bbf7d0")}
+          {stat(f"{max_ct}d", "Slowest",        "#d97706", "#fffbeb", "#fde68a")}
+          {stat(len(ct_sorted), "Stories Tracked", "#374151", "#f8fafc", "#e2e8f0")}
         </div>'''
 
-        # Bucket charts side by side
-        def render_bucket_chart(buckets, title, color):
-            max_count = max((c for _, c in buckets), default=1) or 1
-            rows = ''
-            for label, count in buckets:
-                bar_w = int(count / max_count * 180) if max_count else 0
-                pct   = round(count / len(d['lead_times']) * 100) if d['lead_times'] else 0
-                rows += f'''<tr>
-                  <td style="padding:6px 10px 6px 0;font-size:12px;color:#374151;font-family:Arial;white-space:nowrap;width:90px">{label}</td>
-                  <td style="padding:6px 6px;width:200px">
-                    <svg width="200" height="18" viewBox="0 0 200 18" style="-webkit-print-color-adjust:exact;print-color-adjust:exact">
-                      <rect width="200" height="18" rx="4" fill="#f1f5f9"/>
-                      <rect width="{bar_w}" height="18" rx="4" fill="{color}" style="-webkit-print-color-adjust:exact;print-color-adjust:exact"/>
-                    </svg>
-                  </td>
-                  <td style="padding:6px 0 6px 8px;font-size:12px;font-weight:700;color:{color};font-family:Arial;width:30px">{count}</td>
-                  <td style="padding:6px 0 6px 4px;font-size:11px;color:#94a3b8;font-family:Arial">{pct}%</td>
-                </tr>'''
-            return f'''<div style="flex:1;min-width:260px;background:#f8fafc;border-radius:12px;padding:1rem;border:1px solid #e2e8f0;-webkit-print-color-adjust:exact;print-color-adjust:exact">
-              <div style="font-size:12px;font-weight:700;color:#1e293b;font-family:Arial;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">{title}</div>
-              <table style="width:100%;border-collapse:collapse">{rows}</table>
-            </div>'''
+        # Bucket distribution chart
+        BUCKETS = [(0,5,'0–5 days'),(5,10,'5–10 days'),(10,15,'10–15 days'),(15,20,'15–20 days'),(20,30,'20–30 days'),(30,99999,'30+ days')]
+        bucket_data = [(label, sum(1 for t in ct_sorted if lo <= t < hi)) for lo,hi,label in BUCKETS]
+        max_count = max((c for _,c in bucket_data), default=1) or 1
 
-        html += f'''<div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1rem">
-          {render_bucket_chart(d['lead_buckets'],  'Lead Time Distribution',  '#3b82f6')}
-          {render_bucket_chart(d['cycle_buckets'], 'Cycle Time Distribution', '#8b5cf6')}
+        bucket_rows = ''
+        for label, count in bucket_data:
+            bar_w = int(count / max_count * 220) if max_count else 0
+            pct   = round(count / len(ct_sorted) * 100) if ct_sorted else 0
+            bucket_rows += f'''<tr>
+              <td style="padding:7px 10px 7px 0;font-size:13px;color:#374151;font-family:Arial;white-space:nowrap;width:95px">{label}</td>
+              <td style="padding:7px 8px;width:230px">
+                <svg width="230" height="20" viewBox="0 0 230 20" style="-webkit-print-color-adjust:exact;print-color-adjust:exact">
+                  <rect width="230" height="20" rx="5" fill="#f1f5f9"/>
+                  <rect width="{bar_w}" height="20" rx="5" fill="#8b5cf6" style="-webkit-print-color-adjust:exact;print-color-adjust:exact"/>
+                </svg>
+              </td>
+              <td style="padding:7px 0 7px 10px;font-size:13px;font-weight:700;color:#7c3aed;font-family:Arial;width:35px">{count}</td>
+              <td style="padding:7px 0;font-size:12px;color:#94a3b8;font-family:Arial">{pct}%</td>
+            </tr>'''
+
+        html += f'''<div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:1rem">
+          <div style="flex:1;min-width:300px;background:#f8fafc;border-radius:12px;padding:1.2rem;border:1px solid #e2e8f0;-webkit-print-color-adjust:exact;print-color-adjust:exact">
+            <div style="font-size:12px;font-weight:700;color:#1e293b;font-family:Arial;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px">📊 Cycle Time Distribution (Dev Start → UAT Date)</div>
+            <table style="width:100%;border-collapse:collapse">{bucket_rows}</table>
+          </div>
         </div>'''
 
-        html += f'''<div style="background:#f8fafc;border-radius:10px;padding:10px 14px;border:1px solid #e2e8f0;font-size:12px;color:#64748b;font-family:Arial">
-          <strong style="color:#374151">Lead Time</strong> = Created Date → UAT Date &nbsp;|&nbsp;
+        # Per-story breakdown table (top 10 slowest)
+        slowest = sorted(cycle_times, key=lambda x: -x['days'])[:10]
+        story_rows = ''
+        for i, t in enumerate(slowest):
+            bg = '#f8fafc' if i % 2 == 0 else '#fff'
+            ct_color = '#059669' if t['days'] <= 5 else '#d97706' if t['days'] <= 15 else '#dc2626'
+            story_rows += f'''<tr style="background:{bg};-webkit-print-color-adjust:exact;print-color-adjust:exact">
+              <td style="padding:7px 10px;color:#1d4ed8;font-weight:600;font-family:Arial;font-size:12px;white-space:nowrap">{t.get('key','—')}</td>
+              <td style="padding:7px 10px;color:#1e293b;font-family:Arial;font-size:12px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{str(t.get('summary','—'))[:55]}</td>
+              <td style="padding:7px 10px;text-align:center;color:#374151;font-family:Arial;font-size:12px">{t.get('points','—')}</td>
+              <td style="padding:7px 10px;text-align:center;font-weight:700;color:{ct_color};font-family:Arial;font-size:13px">{t['days']}d</td>
+            </tr>'''
+
+        html += f'''<div style="margin-top:1rem">
+          <div style="font-size:12px;font-weight:700;color:#1e293b;font-family:Arial;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">🐢 Top 10 Slowest Stories</div>
+          <table style="width:100%;border-collapse:collapse;font-family:Arial">
+            <thead><tr style="background:#1e3a8a;-webkit-print-color-adjust:exact;print-color-adjust:exact">
+              <th style="padding:8px 10px;text-align:left;color:#fff;font-size:11px">Key</th>
+              <th style="padding:8px 10px;text-align:left;color:#fff;font-size:11px">Summary</th>
+              <th style="padding:8px 10px;text-align:center;color:#fff;font-size:11px">Points</th>
+              <th style="padding:8px 10px;text-align:center;color:#fff;font-size:11px">Cycle Time</th>
+            </tr></thead>
+            <tbody>{story_rows}</tbody>
+          </table>
+        </div>'''
+
+        html += f'''<div style="background:#f8fafc;border-radius:10px;padding:10px 14px;border:1px solid #e2e8f0;font-size:12px;color:#64748b;font-family:Arial;margin-top:1rem">
           <strong style="color:#374151">Cycle Time</strong> = Dev Start Date → UAT Date &nbsp;|&nbsp;
-          Based on <strong style="color:#374151">{len(d['lead_times'])}</strong> completed tickets
+          🟢 &lt;5d Fast &nbsp; 🟡 5–15d Normal &nbsp; 🔴 &gt;15d Slow
         </div>'''
     else:
-        html += '<div style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:12px 16px;font-size:13px;color:#713f12;font-family:Arial;-webkit-print-color-adjust:exact;print-color-adjust:exact">⚠️ Add <strong>Created</strong> and <strong>Resolved</strong> date columns to your Jira export to unlock Lead Time &amp; Cycle Time metrics.</div>' 
+        html += '<div style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:12px 16px;font-size:13px;color:#713f12;font-family:Arial;-webkit-print-color-adjust:exact;print-color-adjust:exact">⚠️ No Cycle Time data found. Make sure your Jira export includes <strong>Dev Start</strong> and <strong>UAT Date</strong> columns with dates filled in.</div>'
+
 
     # ── 4. BUG / DEFECT ANALYSIS ──────────────────────────────────────────────
     html += section_title('04', 'Bug / Defect Analysis')
